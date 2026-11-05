@@ -1,0 +1,9 @@
+# syntax=docker/dockerfile:1
+# GraniteRust's own suite on Linux (arm64 under Apple's container): scripts/conformance-linux.sh.
+FROM docker.io/library/rust:1-slim-bookworm
+RUN apt-get update && apt-get install -y --no-install-recommends git ca-certificates && rm -rf /var/lib/apt/lists/* \
+ && rustup component add rustfmt clippy
+WORKDIR /src/GraniteRust
+COPY . .
+ENV GRANITE_AGENT_BUILD=1
+CMD ["scripts/check.sh"]
