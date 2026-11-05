@@ -1,6 +1,5 @@
 //! A shelf of runners, installed by hand: read from its records, called through them, and refused once changed.
 
-use std::io::Write;
 use std::path::Path;
 
 use granite_agents::{
@@ -75,12 +74,14 @@ async fn a_changed_executable_is_refused() {
     let installation = install_by_hand(shelf.path(), "ParrotAgent").await;
     let read = AgentShelf::new(shelf.path());
     read.verify(&installation).unwrap();
-    std::fs::OpenOptions::new()
-        .append(true)
-        .open(read.executable_of(&installation))
-        .unwrap()
-        .write_all(&[0])
-        .unwrap();
+    // An executable replaced by another: written beside it and renamed over it. (Writing into a runner that just
+    // ran is refused on Linux, "text file busy"; a replacement is how a runner is changed anyway.)
+    let executable = read.executable_of(&installation);
+    let mut altered = std::fs::read(&executable).unwrap();
+    altered.push(0);
+    let beside = executable.with_extension("altered");
+    std::fs::write(&beside, altered).unwrap();
+    std::fs::rename(&beside, &executable).unwrap();
     let Err(AgentRemoteError::Changed { word, .. }) = read.verify(&installation) else {
         panic!("an appended byte passed")
     };
