@@ -1,0 +1,23 @@
+# Fixture runners and the tests that drive real processes over pipes: describe, a call, a refusal, a fault, a
+# crash, a cancel; the shelf's tamper check; the installer (GRANITE_AGENT_BUILD=1).
+[package]
+name = "granite-conformance"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+publish = false
+
+[[bin]]
+name = "parrot-runner"
+path = "src/bin/parrot_runner.rs"
+
+[dependencies]
+granite-agents = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true }
+libc = { workspace = true }
+
+[dev-dependencies]
+granite = { path = "../granite" }
+tempfile = { workspace = true }

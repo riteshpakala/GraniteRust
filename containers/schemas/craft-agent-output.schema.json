@@ -1,0 +1,49 @@
+{
+  "$id" : "craft-agent/1/output",
+  "$schema" : "https://json-schema.org/draft/2020-12/schema",
+  "allOf" : [
+    {
+      "$ref" : "https://github.com/riteshpakala/Granite/blob/main/Schema/granite-agent-answer.schema.json"
+    }
+  ],
+  "description" : "A granite-answer/1 answer (https://github.com/riteshpakala/Granite/blob/main/Schema/granite-agent-answer.schema.json): `paths`, `made` against `expected`, `problems`, `payloads`, beside the package's own keys. Craft measures `made` against `expected` per call, and draws each payload by its `schema`.",
+  "properties" : {
+    "payloads" : {
+      "items" : {
+        "allOf" : [
+          {
+            "if" : {
+              "properties" : {
+                "schema" : {
+                  "const" : "craft-timeseries/1"
+                }
+              }
+            },
+            "then" : {
+              "description" : "a time series: the file, named `*.timeseries.json`, validates against https://github.com/Rao-Craft-Agents/StoicAgent/blob/main/Schema/timeseries.schema.json"
+            }
+          }
+        ],
+        "properties" : {
+          "path" : {
+            "type" : "string"
+          },
+          "schema" : {
+            "description" : "a registered sub-standard Craft draws, or one it shows as a file",
+            "examples" : [
+              "craft-timeseries/1"
+            ],
+            "type" : "string"
+          }
+        },
+        "required" : [
+          "path",
+          "schema"
+        ],
+        "type" : "object"
+      },
+      "type" : "array"
+    }
+  },
+  "title" : "What Craft reads from an agent package (craft-agent/1)"
+}

@@ -1,0 +1,21 @@
+[package]
+name = "granite-agents"
+description = "The granite-agent/1 standard in Rust: agent packages, their schema and answers, the wire, a runner's main, the host's side of a call, the shelf and the installer."
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+
+[dependencies]
+granite = { workspace = true }
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+sha2 = { workspace = true }
+libc = { workspace = true }
+
+[dev-dependencies]
+granite = { path = "../granite" }
+jsonschema.workspace = true
+tempfile = { workspace = true }

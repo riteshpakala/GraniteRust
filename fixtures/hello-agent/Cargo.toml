@@ -1,0 +1,18 @@
+# The installer's fixture: a package of one agent, `hello`, whose runner is its bin `agent`.
+[package]
+name = "hello-agent"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+publish = false
+
+[package.metadata.granite]
+agent = "agent"
+
+[[bin]]
+name = "agent"
+path = "src/main.rs"
+
+[dependencies]
+granite-agents = { workspace = true }
+serde = { workspace = true }
