@@ -13,6 +13,8 @@ and the answer are byte-compatible: a Swift host (Craft) runs a Rust runner, and
 | [`crates/granite-conformance`](crates/granite-conformance) | A fixture runner (`parrot`) and the tests that drive real processes over pipes |
 | [`fixtures/hello-agent`](fixtures/hello-agent) | The smallest agent package there is: the installer's fixture |
 
+![Built once, called, released: a Rust agent on Craft, built in a short-lived container, each call run in another, its drawing on the Mac's GPU pool](Docs/README_Assets/agent-lifecycle.png)
+
 The standard itself is [`Schema/GraniteAgent.md`](Schema/GraniteAgent.md) and its four JSON Schemas, copied from Granite
 and held to the code by a drift test. [ComicAgent](https://github.com/Rao-Craft-Agents/ComicAgent), a stick-figure comic
 strip drawn on the GPU, is the first agent built on it.

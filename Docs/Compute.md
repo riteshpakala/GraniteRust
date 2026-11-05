@@ -33,6 +33,11 @@ gets its own place.
 
 ## The lifecycle
 
+![Built once, called, released](README_Assets/agent-lifecycle.png)
+
+The plate is drawn by `Docs/README_Assets/src/lifecycle.py` (Playwright driving Google Chrome, the Playfair Display
+Italic face, Rao's mark beside it): `python3 -I Docs/README_Assets/src/lifecycle.py Docs/README_Assets`.
+
 ```text
 install (once)                                   call (every time)
 ──────────────                                   ─────────────────
