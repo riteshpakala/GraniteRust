@@ -1,0 +1,20 @@
+# The `granite` command: install, update, remove and list agents on a shelf; describe a runner; run one call by
+# hand as a host would; check JSON against the standard's schemas.
+[package]
+name = "granite-cli"
+description = "The granite command: a shelf of agent runners, one call by hand, and schema checks."
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "granite"
+path = "src/main.rs"
+
+[dependencies]
+granite = { workspace = true }
+granite-agents = { workspace = true }
+serde_json = { workspace = true }
+jsonschema = { workspace = true }
