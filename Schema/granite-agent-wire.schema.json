@@ -1,0 +1,567 @@
+{
+  "$defs" : {
+    "answer" : {
+      "description" : "the reserved keys of a package call's answer; every other key is the package's own",
+      "properties" : {
+        "agent" : {
+          "properties" : {
+            "word" : {
+              "type" : "string"
+            }
+          },
+          "required" : [
+            "word"
+          ],
+          "type" : "object"
+        },
+        "expected" : {
+          "description" : "what the call asked for, as the package read it",
+          "items" : {
+            "properties" : {
+              "kind" : {
+                "type" : "string"
+              },
+              "name" : {
+                "type" : "string"
+              }
+            },
+            "required" : [
+              "kind",
+              "name"
+            ],
+            "type" : "object"
+          },
+          "type" : "array"
+        },
+        "format" : {
+          "const" : "granite-answer/1"
+        },
+        "made" : {
+          "items" : {
+            "properties" : {
+              "kind" : {
+                "type" : "string"
+              },
+              "name" : {
+                "type" : "string"
+              },
+              "path" : {
+                "type" : "string"
+              },
+              "state" : {
+                "enum" : [
+                  "written",
+                  "rewritten",
+                  "unchanged",
+                  "removed"
+                ],
+                "type" : "string"
+              }
+            },
+            "required" : [
+              "kind",
+              "name"
+            ],
+            "type" : "object"
+          },
+          "type" : "array"
+        },
+        "notes" : {
+          "description" : "what the model should know, one sentence each",
+          "items" : {
+            "type" : "string"
+          },
+          "type" : "array"
+        },
+        "path" : {
+          "description" : "the first file it wrote",
+          "type" : [
+            "string",
+            "null"
+          ]
+        },
+        "paths" : {
+          "description" : "every file it wrote or removed, absolute or relative to the host's folder",
+          "items" : {
+            "type" : "string"
+          },
+          "type" : "array"
+        },
+        "payloads" : {
+          "description" : "files among paths that follow a standard of their own",
+          "items" : {
+            "properties" : {
+              "path" : {
+                "type" : "string"
+              },
+              "schema" : {
+                "description" : "the id the file's own schema key says",
+                "type" : "string"
+              }
+            },
+            "required" : [
+              "path",
+              "schema"
+            ],
+            "type" : "object"
+          },
+          "type" : "array"
+        },
+        "problems" : {
+          "description" : "what the call could only do in part; not a refusal",
+          "items" : {
+            "properties" : {
+              "kind" : {
+                "type" : "string"
+              },
+              "text" : {
+                "type" : "string"
+              }
+            },
+            "required" : [
+              "kind",
+              "text"
+            ],
+            "type" : "object"
+          },
+          "type" : "array"
+        }
+      },
+      "required" : [
+        "format",
+        "agent",
+        "paths"
+      ],
+      "type" : "object"
+    },
+    "entry" : {
+      "properties" : {
+        "budget" : {
+          "enum" : [
+            "reading",
+            "shell"
+          ],
+          "type" : "string"
+        },
+        "fields" : {
+          "additionalProperties" : {
+            "type" : "string"
+          },
+          "description" : "a note beside each input field",
+          "type" : "object"
+        },
+        "guide" : {
+          "description" : "how to use it well, in its own words",
+          "type" : "string"
+        },
+        "kind" : {
+          "enum" : [
+            "package",
+            "worker"
+          ],
+          "type" : "string"
+        },
+        "lanes" : {
+          "description" : "how many calls run at once",
+          "minimum" : 1,
+          "type" : "integer"
+        },
+        "makes" : {
+          "description" : "what it makes, each kind with where it lands",
+          "items" : {
+            "$ref" : "#/$defs/make"
+          },
+          "type" : "array"
+        },
+        "module" : {
+          "description" : "the module that declares it",
+          "type" : "string"
+        },
+        "reportRule" : {
+          "type" : "string"
+        },
+        "schema" : {
+          "$ref" : "#/$defs/schema"
+        },
+        "shell" : {
+          "type" : "boolean"
+        },
+        "summary" : {
+          "description" : "what it does, in one sentence",
+          "type" : "string"
+        },
+        "toolNames" : {
+          "items" : {
+            "type" : "string"
+          },
+          "type" : "array"
+        },
+        "type" : {
+          "description" : "its type, as Module.Type",
+          "type" : "string"
+        },
+        "word" : {
+          "description" : "how a host calls it and a model names it: lowercase, one word",
+          "pattern" : "^[a-z][a-z0-9-]*$",
+          "type" : "string"
+        }
+      },
+      "required" : [
+        "kind",
+        "word",
+        "summary",
+        "module",
+        "type"
+      ],
+      "type" : "object"
+    },
+    "field" : {
+      "properties" : {
+        "name" : {
+          "type" : "string"
+        },
+        "required" : {
+          "type" : "boolean"
+        },
+        "schema" : {
+          "$ref" : "#/$defs/schema"
+        }
+      },
+      "required" : [
+        "name",
+        "schema",
+        "required"
+      ],
+      "type" : "object"
+    },
+    "make" : {
+      "properties" : {
+        "into" : {
+          "description" : "where it writes, relative to the host's folder; * is one path component",
+          "items" : {
+            "type" : "string"
+          },
+          "type" : "array"
+        },
+        "kind" : {
+          "description" : "the kind a call's made and expected items carry",
+          "pattern" : "^[a-z][a-z0-9-]*$",
+          "type" : "string"
+        },
+        "never" : {
+          "description" : "what it never does",
+          "type" : "string"
+        },
+        "what" : {
+          "description" : "what it is, in the words a reading can match to a request",
+          "type" : "string"
+        }
+      },
+      "required" : [
+        "kind",
+        "what",
+        "into"
+      ],
+      "type" : "object"
+    },
+    "refusal" : {
+      "properties" : {
+        "kind" : {
+          "enum" : [
+            "input",
+            "call",
+            "build",
+            "device",
+            "model",
+            "parse",
+            "reach",
+            "answer",
+            "host"
+          ],
+          "type" : "string"
+        },
+        "reasons" : {
+          "description" : "one sentence each, its fix in it",
+          "items" : {
+            "type" : "string"
+          },
+          "type" : "array"
+        }
+      },
+      "required" : [
+        "kind",
+        "reasons"
+      ],
+      "type" : "object"
+    },
+    "schema" : {
+      "description" : "an agent's input schema as data: a word for a scalar or `any`, else exactly one of choice, array, object",
+      "oneOf" : [
+        {
+          "enum" : [
+            "string",
+            "integer",
+            "number",
+            "boolean",
+            "any"
+          ],
+          "type" : "string"
+        },
+        {
+          "properties" : {
+            "choice" : {
+              "items" : {
+                "type" : "string"
+              },
+              "type" : "array"
+            }
+          },
+          "required" : [
+            "choice"
+          ],
+          "type" : "object"
+        },
+        {
+          "properties" : {
+            "array" : {
+              "$ref" : "#/$defs/schema"
+            }
+          },
+          "required" : [
+            "array"
+          ],
+          "type" : "object"
+        },
+        {
+          "properties" : {
+            "object" : {
+              "items" : {
+                "$ref" : "#/$defs/field"
+              },
+              "type" : "array"
+            }
+          },
+          "required" : [
+            "object"
+          ],
+          "type" : "object"
+        }
+      ]
+    }
+  },
+  "$id" : "https://github.com/riteshpakala/Granite/blob/main/Schema/granite-agent-wire.schema.json",
+  "$schema" : "https://json-schema.org/draft/2020-12/schema",
+  "oneOf" : [
+    {
+      "description" : "agent → host, first: what it speaks and which process it is",
+      "properties" : {
+        "hello" : {
+          "properties" : {
+            "answer" : {
+              "description" : "the answer standard its calls keep, granite-answer/1",
+              "type" : "string"
+            },
+            "pid" : {
+              "type" : "integer"
+            },
+            "wire" : {
+              "pattern" : "^granite-agent/[0-9]+$",
+              "type" : "string"
+            }
+          },
+          "required" : [
+            "wire"
+          ],
+          "type" : "object"
+        }
+      },
+      "required" : [
+        "hello"
+      ],
+      "type" : "object"
+    },
+    {
+      "description" : "host → agent: the one call the process answers",
+      "properties" : {
+        "perform" : {
+          "properties" : {
+            "ask" : {
+              "description" : "what the person asked, in their words",
+              "type" : "string"
+            },
+            "directory" : {
+              "type" : "string"
+            },
+            "input" : {
+              "description" : "the call's input, as its schema says"
+            },
+            "model" : {
+              "description" : "whether the host offers its model",
+              "type" : "boolean"
+            },
+            "word" : {
+              "type" : "string"
+            }
+          },
+          "required" : [
+            "word",
+            "input",
+            "model"
+          ],
+          "type" : "object"
+        }
+      },
+      "required" : [
+        "perform"
+      ],
+      "type" : "object"
+    },
+    {
+      "description" : "agent → host: a line of progress",
+      "properties" : {
+        "note" : {
+          "type" : "string"
+        }
+      },
+      "required" : [
+        "note"
+      ],
+      "type" : "object"
+    },
+    {
+      "description" : "agent → host: an ask of the host's model",
+      "properties" : {
+        "model" : {
+          "properties" : {
+            "id" : {
+              "type" : "integer"
+            },
+            "kind" : {
+              "enum" : [
+                "object",
+                "text"
+              ],
+              "type" : "string"
+            },
+            "maxTokens" : {
+              "type" : "integer"
+            },
+            "schema" : {
+              "description" : "JSON Schema, for an object",
+              "type" : "object"
+            },
+            "seconds" : {
+              "type" : "number"
+            },
+            "system" : {
+              "type" : "string"
+            },
+            "user" : {
+              "type" : "string"
+            }
+          },
+          "required" : [
+            "id",
+            "kind",
+            "system",
+            "user",
+            "maxTokens",
+            "seconds"
+          ],
+          "type" : "object"
+        }
+      },
+      "required" : [
+        "model"
+      ],
+      "type" : "object"
+    },
+    {
+      "description" : "host → agent: the answer to an ask, by its id",
+      "properties" : {
+        "answer" : {
+          "properties" : {
+            "error" : {
+              "description" : "why there is no answer",
+              "type" : "string"
+            },
+            "id" : {
+              "type" : "integer"
+            },
+            "object" : {
+
+            },
+            "text" : {
+              "type" : "string"
+            }
+          },
+          "required" : [
+            "id"
+          ],
+          "type" : "object"
+        }
+      },
+      "required" : [
+        "answer"
+      ],
+      "type" : "object"
+    },
+    {
+      "description" : "agent → host, last: the call's output",
+      "properties" : {
+        "output" : {
+          "description" : "a granite-answer/1 answer from a package whose Output keeps it, else its own JSON",
+          "type" : "object"
+        }
+      },
+      "required" : [
+        "output"
+      ],
+      "type" : "object"
+    },
+    {
+      "description" : "agent → host, last: why the call failed, and when it was refused, how",
+      "properties" : {
+        "failed" : {
+          "description" : "the sentence",
+          "type" : "string"
+        },
+        "refused" : {
+          "$ref" : "#/$defs/refusal"
+        }
+      },
+      "required" : [
+        "failed"
+      ],
+      "type" : "object"
+    },
+    {
+      "description" : "host → agent: end the call",
+      "properties" : {
+        "cancel" : {
+          "type" : "object"
+        }
+      },
+      "required" : [
+        "cancel"
+      ],
+      "type" : "object"
+    },
+    {
+      "description" : "agent → host, with --describe: what it carries",
+      "properties" : {
+        "entries" : {
+          "items" : {
+            "$ref" : "#/$defs/entry"
+          },
+          "type" : "array"
+        }
+      },
+      "required" : [
+        "entries"
+      ],
+      "type" : "object"
+    }
+  ],
+  "title" : "A message of granite-agent/1: one JSON object on one line, one key naming it"
+}

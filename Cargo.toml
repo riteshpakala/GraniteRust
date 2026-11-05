@@ -1,0 +1,32 @@
+# GraniteRust: Granite's agent kernel and the granite-agent/1 standard, in Rust.
+#
+#   crates/granite            the kernel: main queue, state, reducers, services, signals, tickets, the agent run engine
+#   crates/granite-agents     the GraniteAgent layer: packages, schema, answers, the wire, server, process, shelf, installer
+#   crates/granite-conformance  fixture runners and the real-process tests (publish = false)
+#   crates/granite-cli        the `granite` command: install, describe, run, check
+#   fixtures/hello-agent      the installer's fixture: a one-word agent in a package of its own
+#
+# An agent is a repository of its own that depends on granite-agents by git URL, as the Swift agents depend on Granite.
+
+[workspace]
+resolver = "3"
+members = ["crates/*"]
+
+[workspace.package]
+edition = "2024"
+license = "GPL-3.0-only"
+version = "0.1.0"
+rust-version = "1.85"
+repository = "https://github.com/riteshpakala/GraniteRust"
+
+[workspace.dependencies]
+granite = { path = "crates/granite", version = "0.1.0" }
+granite-agents = { path = "crates/granite-agents", version = "0.1.0" }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "process", "signal", "io-util"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+sha2 = "0.10"
+libc = "0.2"
+tempfile = "3"
+jsonschema = { version = "0.26", default-features = false }

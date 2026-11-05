@@ -1,0 +1,16 @@
+[package]
+name = "granite"
+description = "Granite's kernel in Rust: one writer on main, reducers and their effects, services and relays, signals and scopes, tickets, and the agent run engine."
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+
+[dependencies]
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
