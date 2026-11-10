@@ -1,8 +1,9 @@
 //! A subsystem's one live instance: Swift's `GraniteService`, `@Relay` and `Live.service`.
 //!
 //! PIN: ONE PER TYPE PER PROCESS. [`Relay::live`] makes the service once, outside the registry's lock (a
-//! service whose making reaches another relay cannot deadlock), and every later relay shares it. A
-//! reducer reaches its own service with `Relay::<Self>::live()` from its effect, never by storing one.
+//! service whose making reaches another relay cannot deadlock), and every later relay shares it. One
+//! made by a caller that lost a race is dropped after the unlock. A reducer reaches its own service with
+//! `Relay::<Self>::live()` from its effect, never by storing one.
 
 use std::any::{Any, TypeId};
 use std::collections::HashMap;
@@ -11,6 +12,7 @@ use std::sync::{Arc, Mutex, OnceLock};
 
 use tokio::sync::watch;
 
+use crate::locked::Locked;
 use crate::{Center, GraniteState, Main, Subscription};
 
 /// A subsystem: a center, its events, its agents.
@@ -37,8 +39,10 @@ impl<S: GraniteService> Deref for Relay<S> {
     }
 }
 
-fn registry() -> &'static Mutex<HashMap<TypeId, Arc<dyn Any + Send + Sync>>> {
-    static LIVE: OnceLock<Mutex<HashMap<TypeId, Arc<dyn Any + Send + Sync>>>> = OnceLock::new();
+type Live = HashMap<TypeId, Arc<dyn Any + Send + Sync>>;
+
+fn registry() -> &'static Locked<Live> {
+    static LIVE: OnceLock<Locked<Live>> = OnceLock::new();
     LIVE.get_or_init(Default::default)
 }
 
@@ -46,7 +50,7 @@ impl<S: GraniteService> Relay<S> {
     /// The live `S`, made on [`Main::global`] the first time any relay asks.
     pub fn live() -> Relay<S> {
         let id = TypeId::of::<S>();
-        if let Some(found) = registry().lock().unwrap().get(&id).cloned() {
+        if let Some(found) = registry().with(|live| live.get(&id).cloned()) {
             return Relay(
                 found
                     .downcast::<S>()
@@ -54,7 +58,14 @@ impl<S: GraniteService> Relay<S> {
             );
         }
         let made: Arc<dyn Any + Send + Sync> = Arc::new(S::make(Main::global()));
-        let kept = registry().lock().unwrap().entry(id).or_insert(made).clone();
+        let (kept, lost) = registry().with(|live| match live.get(&id) {
+            Some(found) => (found.clone(), Some(made)),
+            None => {
+                live.insert(id, made.clone());
+                (made, None)
+            }
+        });
+        drop(lost);
         Relay(
             kept.downcast::<S>()
                 .expect("granite: a relay of another type"),

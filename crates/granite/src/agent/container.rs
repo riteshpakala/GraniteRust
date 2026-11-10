@@ -8,10 +8,13 @@
 //! before calling. A run's task only ever enqueues.
 //! PIN: A WAIT SETTLES AFTER THE STATE IS WRITTEN. A finished run's waiters resume in the drain that
 //! committed its lifecycle, after its last events; a cancelled one's after the `Cancelled` commit.
+//! PIN: NOTHING IS DROPPED UNDER THE LOCK. What a locked body takes out (a finished run and its compute,
+//! a refused input, a superseded run's frames, a slot, a tap) is returned and dropped after the unlock:
+//! any of them may own what the author wrote, and its drop may reach this container again.
 
 use std::any::TypeId;
 use std::collections::{HashMap, HashSet};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 use tokio::sync::{mpsc, oneshot};
 use tokio::task::JoinHandle;
@@ -21,6 +24,7 @@ use super::{
     AgentConcurrency, AgentContext, AgentHost, AgentLifecycle, AgentOutcome, AgentRunError,
     AgentRunId, AgentStart, CancelFlag, GraniteAgent, RunScope,
 };
+use crate::locked::Locked;
 use crate::{BoxError, BoxFuture, Center};
 
 pub(crate) type Resolver<A> = Arc<
@@ -79,7 +83,7 @@ pub(crate) struct RunContainer<A: GraniteAgent> {
     pub(crate) label: String,
     agent: Arc<A>,
     concurrency: AgentConcurrency,
-    inner: Mutex<Inner<A>>,
+    inner: Locked<Inner<A>>,
 }
 
 /// A type's name without its path or generics: `PackageRun` for `granite_agents::package::PackageRun<Hello>`.
@@ -96,7 +100,7 @@ impl<A: GraniteAgent> RunContainer<A> {
             label: short_name::<A>(),
             agent: Arc::new(A::default()),
             concurrency,
-            inner: Mutex::new(Inner {
+            inner: Locked::new(Inner {
                 runs: HashMap::new(),
                 waiting: Vec::new(),
                 frames: HashMap::new(),
@@ -112,44 +116,42 @@ impl<A: GraniteAgent> RunContainer<A> {
     }
 
     pub(crate) fn attach(&self, resolver: Resolver<A>) {
-        self.inner.lock().unwrap().resolver = Some(resolver);
+        let replaced = self.inner.with(|inner| inner.resolver.replace(resolver));
+        drop(replaced);
     }
 
     pub(crate) fn is_live(&self, key: &str) -> bool {
-        self.inner.lock().unwrap().runs.contains_key(key)
+        self.inner.with(|inner| inner.runs.contains_key(key))
     }
 
     pub(crate) fn live_keys(&self) -> Vec<String> {
-        let inner = self.inner.lock().unwrap();
-        inner
-            .runs
-            .keys()
-            .cloned()
-            .chain(inner.waiting.iter().map(|(run, _)| run.key.clone()))
-            .collect()
+        self.inner.with(|inner| {
+            inner
+                .runs
+                .keys()
+                .cloned()
+                .chain(inner.waiting.iter().map(|(run, _)| run.key.clone()))
+                .collect()
+        })
     }
 
     fn mint(&self, key: &str) -> AgentRunId {
-        let mut inner = self.inner.lock().unwrap();
-        inner.counter += 1;
-        AgentRunId::new(format!("{}-{}", self.label, inner.counter), key, None)
+        let counter = self.inner.with(|inner| {
+            inner.counter += 1;
+            inner.counter
+        });
+        AgentRunId::new(format!("{}-{}", self.label, counter), key, None)
     }
 
     // MARK: runs (main)
 
     /// Main. Live runs commit `Cancelled`, and so do runs still waiting for a lane.
     pub(crate) fn cancel_prefix(self: &Arc<Self>, prefix: &str) {
-        let (live, dropped) = {
-            let mut inner = self.inner.lock().unwrap();
-            let dropped: Vec<AgentRunId> = inner
-                .waiting
-                .iter()
-                .filter(|(run, _)| run.key.starts_with(prefix))
-                .map(|(run, _)| run.clone())
-                .collect();
-            inner
-                .waiting
-                .retain(|(run, _)| !run.key.starts_with(prefix));
+        let (live, dropped) = self.inner.with(|inner| {
+            let (dropped, kept): (Vec<_>, Vec<_>) = std::mem::take(&mut inner.waiting)
+                .into_iter()
+                .partition(|(run, _)| run.key.starts_with(prefix));
+            inner.waiting = kept;
             let live: Vec<String> = inner
                 .runs
                 .keys()
@@ -157,7 +159,9 @@ impl<A: GraniteAgent> RunContainer<A> {
                 .cloned()
                 .collect();
             (live, dropped)
-        };
+        });
+        // The inputs that were waiting go now, after the unlock.
+        let dropped: Vec<AgentRunId> = dropped.into_iter().map(|(run, _)| run).collect();
         for run in dropped {
             self.commit_lifecycle(AgentLifecycle::Cancelled, &run);
             self.close_taps(&run.key);
@@ -170,19 +174,17 @@ impl<A: GraniteAgent> RunContainer<A> {
 
     /// Main. Drops one run still waiting for a lane: it ends as one cancelled live would.
     pub(crate) fn cancel_queued(self: &Arc<Self>, run: &AgentRunId) {
-        let dropped = {
-            let mut inner = self.inner.lock().unwrap();
-            match inner.waiting.iter().position(|(waiting, _)| waiting == run) {
-                Some(index) => {
-                    inner.waiting.remove(index);
-                    true
-                }
-                None => false,
-            }
-        };
-        if !dropped {
+        let dropped = self.inner.with(|inner| {
+            let index = inner
+                .waiting
+                .iter()
+                .position(|(waiting, _)| waiting == run)?;
+            Some(inner.waiting.remove(index))
+        });
+        if dropped.is_none() {
             return;
         }
+        drop(dropped);
         self.commit_lifecycle(AgentLifecycle::Cancelled, run);
         self.close_taps(&run.key);
         self.settle(run, Err(AgentRunError::Cancelled));
@@ -193,30 +195,32 @@ impl<A: GraniteAgent> RunContainer<A> {
         let key = A::key(&input);
         let live = self
             .inner
-            .lock()
-            .unwrap()
-            .runs
-            .get(&key)
-            .map(|run| run.id.clone());
+            .with(|inner| inner.runs.get(&key).map(|run| run.id.clone()));
         if let Some(live) = live {
             match self.concurrency {
                 AgentConcurrency::Supersede => self.cancel_key(&key, true),
                 AgentConcurrency::Drop => return AgentStart::Dropped,
                 AgentConcurrency::Merge => {
-                    let mut inner = self.inner.lock().unwrap();
-                    let run = inner
-                        .runs
-                        .get_mut(&key)
-                        .expect("granite: a live run vanished under the lock");
-                    if let Some(context) = run.context.clone() {
-                        drop(inner);
+                    // The run has its compute: merge into it. Not yet: it adopts the input when it does.
+                    let merging = self.inner.with(|inner| {
+                        let run = inner
+                            .runs
+                            .get_mut(&key)
+                            .expect("granite: a live run vanished under the lock");
+                        match run.context.clone() {
+                            Some(context) => Ok((input, context)),
+                            None => {
+                                run.pending_merges.push(input);
+                                Err(())
+                            }
+                        }
+                    });
+                    if let Ok((input, context)) = merging {
                         let agent = self.agent.clone();
                         let into = live.clone();
                         self.center
                             .main()
                             .spawn_work(async move { agent.merge(input, &into, &context).await });
-                    } else {
-                        run.pending_merges.push(input);
                     }
                     return AgentStart::Merged(live);
                 }
@@ -225,28 +229,35 @@ impl<A: GraniteAgent> RunContainer<A> {
             }
         }
         if let AgentConcurrency::Parallel { .. } = self.concurrency {
-            let replaced = {
-                let mut inner = self.inner.lock().unwrap();
-                inner
-                    .waiting
-                    .iter()
-                    .position(|(run, _)| run.key == key)
-                    .map(|index| inner.waiting.remove(index).0)
-            };
-            if let Some(replaced) = replaced {
+            let replaced = self.inner.with(|inner| {
+                let index = inner.waiting.iter().position(|(run, _)| run.key == key)?;
+                Some(inner.waiting.remove(index))
+            });
+            if let Some((replaced, input)) = replaced {
+                drop(input);
                 self.commit_lifecycle(AgentLifecycle::Cancelled, &replaced);
                 self.close_taps(&key);
                 self.settle(&replaced, Err(AgentRunError::Superseded(replaced.clone())));
             }
         }
         let run = self.mint(&key);
-        if let AgentConcurrency::Parallel { max: Some(max) } = self.concurrency {
-            let mut inner = self.inner.lock().unwrap();
-            if inner.runs.len() >= max {
-                inner.waiting.push((run.clone(), input));
-                return AgentStart::Queued(run);
+        let input = match self.concurrency {
+            AgentConcurrency::Parallel { max: Some(max) } => {
+                let queued = self.inner.with(|inner| {
+                    if inner.runs.len() >= max {
+                        inner.waiting.push((run.clone(), input));
+                        None
+                    } else {
+                        Some(input)
+                    }
+                });
+                let Some(input) = queued else {
+                    return AgentStart::Queued(run);
+                };
+                input
             }
-        }
+            _ => input,
+        };
         self.launch(input, run.clone());
         AgentStart::Started(run)
     }
@@ -258,17 +269,18 @@ impl<A: GraniteAgent> RunContainer<A> {
         } else {
             Reason::Cancelled
         };
-        let live = {
-            let mut inner = self.inner.lock().unwrap();
-            let Some(live) = inner.runs.remove(key) else {
-                return;
-            };
+        let removed = self.inner.with(|inner| {
+            let live = inner.runs.remove(key)?;
             // Said now, on main, before any late event could: the run is over for the state and for
             // whoever was listening. Events it still enqueues are dropped (`drain` checks).
-            inner.frames.remove(&live.id.raw);
+            let frames = inner.frames.remove(&live.id.raw);
             inner.frames_seen.remove(&live.id.raw);
-            live
+            Some((live, frames))
+        });
+        let Some((live, frames)) = removed else {
+            return;
         };
+        drop(frames);
         live.cancel.set();
         if let Some(task) = &live.task {
             task.abort();
@@ -285,9 +297,8 @@ impl<A: GraniteAgent> RunContainer<A> {
 
     fn launch(self: &Arc<Self>, input: A::Input, run: AgentRunId) {
         let cancel = CancelFlag::new();
-        let resolver = {
-            let mut inner = self.inner.lock().unwrap();
-            inner.runs.insert(
+        let (resolver, replaced) = self.inner.with(|inner| {
+            let replaced = inner.runs.insert(
                 run.key.clone(),
                 LiveRun {
                     id: run.clone(),
@@ -297,8 +308,9 @@ impl<A: GraniteAgent> RunContainer<A> {
                     pending_merges: Vec::new(),
                 },
             );
-            inner.resolver.clone()
-        };
+            (inner.resolver.clone(), replaced)
+        });
+        drop(replaced);
         self.commit_lifecycle(AgentLifecycle::Started, &run);
         let this = self.clone();
         let scope = RunScope {
@@ -346,10 +358,13 @@ impl<A: GraniteAgent> RunContainer<A> {
                 };
                 this.enqueue(Frame::Lifecycle(outcome), &run);
             }));
-        let mut inner = self.inner.lock().unwrap();
-        match inner.runs.get_mut(&id.key) {
-            Some(live) if live.id == id => live.task = Some(task),
-            _ => task.abort(),
+        // The run may already be over (cancelled while its task was spawned): then the task goes too.
+        let stray = self.inner.with(|inner| match inner.runs.get_mut(&id.key) {
+            Some(live) if live.id == id => live.task.replace(task),
+            _ => Some(task),
+        });
+        if let Some(task) = stray {
+            task.abort();
         }
     }
 
@@ -359,29 +374,29 @@ impl<A: GraniteAgent> RunContainer<A> {
         run: &AgentRunId,
         context: &AgentContext<A::Compute, A::Event>,
     ) -> Vec<A::Input> {
-        let mut inner = self.inner.lock().unwrap();
-        match inner.runs.get_mut(&run.key) {
+        let (merges, replaced) = self.inner.with(|inner| match inner.runs.get_mut(&run.key) {
             Some(live) if live.id == *run => {
-                live.context = Some(context.clone());
-                std::mem::take(&mut live.pending_merges)
+                let replaced = live.context.replace(context.clone());
+                (std::mem::take(&mut live.pending_merges), replaced)
             }
-            _ => Vec::new(),
-        }
+            _ => (Vec::new(), None),
+        });
+        drop(replaced);
+        merges
     }
 
     fn start_waiting(self: &Arc<Self>) {
         let AgentConcurrency::Parallel { max } = self.concurrency else {
             return;
         };
-        let next = {
-            let mut inner = self.inner.lock().unwrap();
+        let next = self.inner.with(|inner| {
             let room = max.is_none_or(|max| inner.runs.len() < max);
             if room && !inner.waiting.is_empty() {
                 Some(inner.waiting.remove(0))
             } else {
                 None
             }
-        };
+        });
         if let Some((run, input)) = next {
             self.launch(input, run);
         }
@@ -390,11 +405,10 @@ impl<A: GraniteAgent> RunContainer<A> {
     // MARK: events (any thread in, main out)
 
     fn enqueue(self: &Arc<Self>, frame: Frame<A::Event>, run: &AgentRunId) {
-        let schedule = {
-            let mut inner = self.inner.lock().unwrap();
+        let schedule = self.inner.with(|inner| {
             inner.frames.entry(run.raw.clone()).or_default().push(frame);
             inner.drains.insert(run.raw.clone())
-        };
+        });
         if schedule {
             let (this, run) = (self.clone(), run.clone());
             self.center.main().enqueue(move || this.drain(&run));
@@ -402,16 +416,16 @@ impl<A: GraniteAgent> RunContainer<A> {
     }
 
     fn drain(self: &Arc<Self>, run: &AgentRunId) {
-        let pending = {
-            let mut inner = self.inner.lock().unwrap();
+        let (pending, current) = self.inner.with(|inner| {
             inner.drains.remove(&run.raw);
             let pending = inner.frames.remove(&run.raw).unwrap_or_default();
-            // An event of a run that was superseded or cancelled is dropped: its state is gone.
-            if pending.is_empty() || inner.runs.get(&run.key).is_none_or(|live| live.id != *run) {
-                return;
-            }
-            pending
-        };
+            let current = inner.runs.get(&run.key).is_some_and(|live| live.id == *run);
+            (pending, current)
+        });
+        // An event of a run that was superseded or cancelled is dropped, after the unlock: its state is gone.
+        if pending.is_empty() || !current {
+            return;
+        }
         let mut events: Vec<A::Event> = Vec::new();
         let mut seen = 0;
         let mut ended = None;
@@ -427,11 +441,10 @@ impl<A: GraniteAgent> RunContainer<A> {
                 Frame::Lifecycle(lifecycle) => ended = Some(lifecycle),
             }
         }
-        let taps = {
-            let mut inner = self.inner.lock().unwrap();
+        let taps = self.inner.with(|inner| {
             *inner.frames_seen.entry(run.raw.clone()).or_default() += seen;
             inner.taps.get(&run.key).cloned().unwrap_or_default()
-        };
+        });
         for event in &events {
             for tap in &taps {
                 let _ = tap.send(event.clone());
@@ -446,13 +459,16 @@ impl<A: GraniteAgent> RunContainer<A> {
         }
         self.center.commit(state);
         let Some(ended) = ended else { return };
-        let count = {
-            let mut inner = self.inner.lock().unwrap();
-            if inner.runs.get(&run.key).is_some_and(|live| live.id == *run) {
-                inner.runs.remove(&run.key);
-            }
-            inner.frames_seen.remove(&run.raw).unwrap_or(0)
-        };
+        let (count, finished) = self.inner.with(|inner| {
+            let finished = if inner.runs.get(&run.key).is_some_and(|live| live.id == *run) {
+                inner.runs.remove(&run.key)
+            } else {
+                None
+            };
+            (inner.frames_seen.remove(&run.raw).unwrap_or(0), finished)
+        });
+        // The finished run's context, and the compute it holds, go after the unlock.
+        drop(finished);
         self.close_taps(&run.key);
         self.start_waiting();
         let result = match ended {
@@ -476,30 +492,29 @@ impl<A: GraniteAgent> RunContainer<A> {
 
     /// Main. Opens a wait on `run` so a settle that lands before the waiter suspends is kept.
     fn open(&self, run: &AgentRunId) {
-        self.inner
-            .lock()
-            .unwrap()
-            .slots
-            .entry(run.raw.clone())
-            .or_default()
-            .openers += 1;
+        self.inner.with(|inner| {
+            inner.slots.entry(run.raw.clone()).or_default().openers += 1;
+        });
     }
 
     fn settle(&self, run: &AgentRunId, result: Settled) {
-        let waiters = {
-            let mut inner = self.inner.lock().unwrap();
-            let Some(slot) = inner.slots.get_mut(&run.raw) else {
-                return;
-            };
+        let settled = self.inner.with(|inner| {
+            let slot = inner.slots.get_mut(&run.raw)?;
             let waiters: Vec<oneshot::Sender<Settled>> =
                 slot.waiters.drain().map(|(_, waiter)| waiter).collect();
             slot.openers = slot.openers.saturating_sub(waiters.len());
-            slot.result = Some(result.clone());
-            if slot.openers == 0 {
-                inner.slots.remove(&run.raw);
-            }
-            waiters
+            let replaced = slot.result.replace(result.clone());
+            let removed = if slot.openers == 0 {
+                inner.slots.remove(&run.raw)
+            } else {
+                None
+            };
+            Some((waiters, replaced, removed))
+        });
+        let Some((waiters, replaced, removed)) = settled else {
+            return;
         };
+        drop((replaced, removed));
         for waiter in waiters {
             let _ = waiter.send(result.clone());
         }
@@ -508,23 +523,29 @@ impl<A: GraniteAgent> RunContainer<A> {
     /// Suspends on an opened wait until the run settles. Dropped before it settles, it stops waiting, and,
     /// when `owned`, cancels the run it started.
     async fn suspend(self: &Arc<Self>, run: &AgentRunId, owned: bool) -> Settled {
-        let (token, receiver) = {
-            let mut inner = self.inner.lock().unwrap();
+        // Waiting, or answered now. A slot the answer empties is dropped after the unlock.
+        let mut emptied: Option<Slot> = None;
+        let suspended = self.inner.with(|inner| {
             inner.tokens += 1;
             let token = inner.tokens;
             let Some(slot) = inner.slots.get_mut(&run.raw) else {
-                return Err(AgentRunError::UnknownRun(run.clone()));
+                return Err(Err(AgentRunError::UnknownRun(run.clone())));
             };
             if let Some(result) = slot.result.clone() {
                 slot.openers = slot.openers.saturating_sub(1);
                 if slot.openers == 0 {
-                    inner.slots.remove(&run.raw);
+                    emptied = inner.slots.remove(&run.raw);
                 }
-                return result;
+                return Err(result);
             }
             let (tx, rx) = oneshot::channel();
             slot.waiters.insert(token, tx);
-            (token, rx)
+            Ok((token, rx))
+        });
+        drop(emptied);
+        let (token, receiver) = match suspended {
+            Ok(waiting) => waiting,
+            Err(result) => return result,
         };
         let mut guard = WaitGuard {
             container: self.clone(),
@@ -539,10 +560,10 @@ impl<A: GraniteAgent> RunContainer<A> {
     }
 
     pub(crate) async fn perform(self: &Arc<Self>, input: A::Input) -> Settled {
-        if let Some(scope) = RunScope::current()
-            && scope.agent == TypeId::of::<A>()
-            && scope.run.key == A::key(&input)
-        {
+        // A `.filter`, not a let-chain: those need Rust 1.88, and the crate promises 1.85.
+        let reentrant = RunScope::current()
+            .filter(|scope| scope.agent == TypeId::of::<A>() && scope.run.key == A::key(&input));
+        if let Some(scope) = reentrant {
             return Err(AgentRunError::Reentrant(scope.run));
         }
         // One main turn opens the wait and starts the run, so no event can land between the two.
@@ -572,15 +593,14 @@ impl<A: GraniteAgent> RunContainer<A> {
             .center
             .main()
             .call(move || {
-                let known = {
-                    let inner = this.inner.lock().unwrap();
+                let known = this.inner.with(|inner| {
                     inner.slots.contains_key(&asked.raw)
                         || inner
                             .runs
                             .get(&asked.key)
                             .is_some_and(|live| live.id == asked)
                         || inner.waiting.iter().any(|(waiting, _)| *waiting == asked)
-                };
+                });
                 if known {
                     this.open(&asked);
                 }
@@ -600,8 +620,7 @@ impl<A: GraniteAgent> RunContainer<A> {
             .center
             .main()
             .call(move || {
-                let runs: Vec<AgentRunId> = {
-                    let inner = this.inner.lock().unwrap();
+                let runs: Vec<AgentRunId> = this.inner.with(|inner| {
                     inner
                         .runs
                         .values()
@@ -609,7 +628,7 @@ impl<A: GraniteAgent> RunContainer<A> {
                         .chain(inner.waiting.iter().map(|(run, _)| run.clone()))
                         .filter(|run| run.key.starts_with(&prefix))
                         .collect()
-                };
+                });
                 for run in &runs {
                     this.open(run);
                 }
@@ -626,17 +645,14 @@ impl<A: GraniteAgent> RunContainer<A> {
     pub(crate) fn events(&self, key: &str) -> mpsc::UnboundedReceiver<A::Event> {
         let (tx, rx) = mpsc::unbounded_channel();
         self.inner
-            .lock()
-            .unwrap()
-            .taps
-            .entry(key.to_owned())
-            .or_default()
-            .push(tx);
+            .with(|inner| inner.taps.entry(key.to_owned()).or_default().push(tx));
         rx
     }
 
+    /// Ends the taps on `key`: their senders go after the unlock, and each reader sees its run end.
     fn close_taps(&self, key: &str) {
-        self.inner.lock().unwrap().taps.remove(key);
+        let closed = self.inner.with(|inner| inner.taps.remove(key));
+        drop(closed);
     }
 }
 
@@ -654,27 +670,27 @@ impl<A: GraniteAgent> Drop for WaitGuard<A> {
             return;
         }
         // This waiter only: a dropped caller stops waiting; whether the run stops is `owned`'s.
-        {
-            let mut inner = self.container.inner.lock().unwrap();
-            if let Some(slot) = inner.slots.get_mut(&self.run.raw) {
-                if slot.waiters.remove(&self.token).is_some() {
-                    slot.openers = slot.openers.saturating_sub(1);
-                }
-                if slot.openers == 0 && slot.waiters.is_empty() {
-                    inner.slots.remove(&self.run.raw);
-                }
+        let removed = self.container.inner.with(|inner| {
+            let slot = inner.slots.get_mut(&self.run.raw)?;
+            let waiter = slot.waiters.remove(&self.token);
+            if waiter.is_some() {
+                slot.openers = slot.openers.saturating_sub(1);
             }
-        }
+            let emptied = slot.openers == 0 && slot.waiters.is_empty();
+            let slot = if emptied {
+                inner.slots.remove(&self.run.raw)
+            } else {
+                None
+            };
+            Some((waiter, slot))
+        });
+        drop(removed);
         if self.owned {
             let (container, run) = (self.container.clone(), self.run.clone());
             self.container.center.main().enqueue(move || {
                 let live = container
                     .inner
-                    .lock()
-                    .unwrap()
-                    .runs
-                    .get(&run.key)
-                    .is_some_and(|live| live.id == run);
+                    .with(|inner| inner.runs.get(&run.key).is_some_and(|live| live.id == run));
                 if live {
                     container.cancel_key(&run.key, false)
                 } else {

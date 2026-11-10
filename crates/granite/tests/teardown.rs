@@ -8,7 +8,7 @@ use std::time::Duration;
 
 use granite::{
     Agent, AgentContext, AgentRunId, BoxError, Center, Event, GraniteAgent, GraniteReducer,
-    Lifecycle, Main,
+    Lifecycle, Main, TransientRegistry,
 };
 
 #[derive(Clone, PartialEq, Default, Debug)]
@@ -270,4 +270,40 @@ fn a_hook_on_the_center_itself_lasts_as_long_as_the_center() {
         1,
         "the hook went with the center"
     );
+}
+
+/// A resident that puts another into its registry as it is dropped.
+struct Leaves(Option<Arc<TransientRegistry<Arc<Leaves>>>>);
+
+impl Drop for Leaves {
+    fn drop(&mut self) {
+        if let Some(registry) = self.0.take() {
+            registry.put("left behind", Arc::new(Leaves(None)));
+        }
+    }
+}
+
+#[test]
+fn a_registry_resident_may_reach_its_registry_as_it_is_made_or_dropped() {
+    without_hanging("registry", || {
+        let registry = Arc::new(TransientRegistry::<Arc<Leaves>>::new());
+        let made = registry.value("made", || {
+            assert!(
+                registry.get("other").is_none(),
+                "make runs outside the lock"
+            );
+            Arc::new(Leaves(None))
+        });
+        assert!(Arc::ptr_eq(
+            &made,
+            &registry.value("made", || unreachable!())
+        ));
+
+        registry.put("leaving", Arc::new(Leaves(Some(registry.clone()))));
+        registry.remove_all();
+        assert!(
+            registry.contains("left behind"),
+            "the drop ran after the unlock"
+        );
+    });
 }
