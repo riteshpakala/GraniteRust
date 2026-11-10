@@ -120,7 +120,7 @@ fn an_installation_validates_against_the_installation_schema() {
         format: AgentInstallation::FORMAT.into(),
         name: "ComicAgent".into(),
         source: AgentSource::Git {
-            url: "https://github.com/Rao-Craft-Agents/ComicAgent.git".into(),
+            url: "https://github.com/rao-craft/ComicAgent.git".into(),
             revision: Some("abc123".into()),
         },
         revision: Some("abc123".into()),

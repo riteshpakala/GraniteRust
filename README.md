@@ -16,7 +16,7 @@ and the answer are byte-compatible: a Swift host (Craft) runs a Rust runner, and
 ![Built once, called, released: a Rust agent on Craft, built in a short-lived container, each call run in another, its drawing on the Mac's GPU pool](Docs/README_Assets/agent-lifecycle.png)
 
 The standard itself is [`Schema/GraniteAgent.md`](Schema/GraniteAgent.md) and its four JSON Schemas, copied from Granite
-and held to the code by a drift test. [ComicAgent](https://github.com/Rao-Craft-Agents/ComicAgent), a stick-figure comic
+and held to the code by a drift test. [ComicAgent](https://github.com/rao-craft/ComicAgent), a stick-figure comic
 strip drawn on the GPU, is the first agent built on it.
 
 ## An agent, in three files
@@ -89,7 +89,7 @@ scripts/check.sh                                         # fmt, clippy, the whol
 GRANITE_AGENT_BUILD=1 cargo test -p granite-conformance  # the installer too, building fixtures/hello-agent
 cargo build --release -p granite-cli                     # target/release/granite
 
-granite agents add https://github.com/Rao-Craft-Agents/ComicAgent.git --shelf ~/shelf
+granite agents add https://github.com/rao-craft/ComicAgent.git --shelf ~/shelf
 granite agents list --shelf ~/shelf
 granite describe ~/shelf/ComicAgent/agent
 echo '{"perform":{"word":"comic","input":{"script":"strip.png"},"model":false}}' | granite run ~/shelf/ComicAgent/agent - --directory .

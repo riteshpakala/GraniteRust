@@ -20,7 +20,7 @@
               }
             },
             "then" : {
-              "description" : "a time series: the file, named `*.timeseries.json`, validates against https://github.com/Rao-Craft-Agents/StoicAgent/blob/main/Schema/timeseries.schema.json"
+              "description" : "a time series: the file, named `*.timeseries.json`, validates against https://github.com/rao-craft/StoicAgent/blob/main/Schema/timeseries.schema.json"
             }
           }
         ],
