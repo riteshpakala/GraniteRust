@@ -7,13 +7,17 @@
 //!
 //! - [`Main`]: the single writer's thread (Swift's `MainActor`), and the runtime effects and runs use.
 //! - [`Center`]: a state and its one writer; [`Event`] + [`GraniteReducer`] + [`Effect`]: what a send does.
-//! - [`GraniteService`] + [`Relay`]: one live service per type, read and observed.
-//! - [`Signal`], [`Subscription`], [`Scope`]: fan-out and what ends it.
+//! - [`GraniteService`] + [`Relay`]: one live service per type, read and observed ([`Observation`]).
+//! - [`Emitter`]: fan-out to receivers held weakly, ending with them (Swift's `GraniteEmitter`).
 //! - [`scaffolding`]: [`Tickets`], [`Lane`], [`RunRegistry`], [`TransientRegistry`].
 //! - [`agent`]: [`GraniteAgent`], [`Agent`] (Swift's `@Agent`), [`AgentContext`], [`AgentHost`].
 //!
 //! PIN: ONE WRITER. A center's state is written only on main ([`Center::commit`]), and only by its
 //! reducers and its agents' drains. Work never touches state: it sends, and the send commits.
+//! PIN: NOTHING IS DROPPED UNDER A LOCK. Every lock in the kernel is a `Locked`, whose body hands back
+//! what it takes out to be dropped after the unlock: a drop may run what the author wrote, and that may
+//! reach the same lock again. Nothing stores a token to end what it started: subscriptions end with
+//! their receivers, timers hold their events weakly, and lifecycle hooks do not keep their owners.
 
 pub mod agent;
 mod emitter;
@@ -22,9 +26,7 @@ mod main_queue;
 mod persist;
 mod reducer;
 pub mod scaffolding;
-mod scope;
 mod service;
-mod signal;
 mod state;
 pub mod testing;
 
@@ -41,9 +43,7 @@ pub use main_queue::Main;
 pub use persist::{FilePersistence, Persistence};
 pub use reducer::{Delivery, Effect, Event, GraniteReducer};
 pub use scaffolding::{Lane, RunRegistry, Ticket, TicketError, Tickets, TransientRegistry};
-pub use scope::{Cancellable, Scope, Subscription};
-pub use service::{GraniteService, Relay};
-pub use signal::Signal;
+pub use service::{GraniteService, Observation, Relay};
 pub use state::{Center, GraniteState, Lifecycle};
 
 /// An error a run or an effect ends with: anything that says what went wrong.

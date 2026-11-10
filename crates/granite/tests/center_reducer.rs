@@ -50,6 +50,11 @@ fn a_send_commits_one_main_turn_later_and_in_order() {
     let center = Center::<Counts>::new(&main);
     let add = Event::new(&center, Add);
     main.block_on(async {
+        // Main is held while the sends go out, so what they wrote can only be read after its turns.
+        let (release, hold) = std::sync::mpsc::channel::<()>();
+        main.enqueue(move || {
+            let _ = hold.recv();
+        });
         for n in 1..=5 {
             add.send(n);
         }
@@ -58,6 +63,7 @@ fn a_send_commits_one_main_turn_later_and_in_order() {
             0,
             "nothing is written before main's turn"
         );
+        release.send(()).unwrap();
         main.turn().await;
         assert_eq!(
             center.state(),

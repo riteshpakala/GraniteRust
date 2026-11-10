@@ -8,12 +8,13 @@
 use std::any::{Any, TypeId};
 use std::collections::HashMap;
 use std::ops::Deref;
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock, Weak};
 
 use tokio::sync::watch;
+use tokio::task::JoinHandle;
 
 use crate::locked::Locked;
-use crate::{Center, GraniteState, Main, Subscription};
+use crate::{Center, GraniteState, Main};
 
 /// A subsystem: a center, its events, its agents.
 pub trait GraniteService: Send + Sync + Sized + 'static {
@@ -85,31 +86,70 @@ impl<S: GraniteService> Relay<S> {
         self.0.center().watch()
     }
 
-    /// Calls `handler` on main with `select(state)` whenever it changes. Ends with the subscription.
-    pub fn observe<V>(
+    /// Calls `handler` on main with `select(state)` whenever it changes, until the [`Observation`] is
+    /// dropped. A delivery already queued when it is dropped does not run.
+    pub fn observe<V, H>(
         &self,
         select: impl Fn(&S::State) -> V + Send + 'static,
-        handler: impl FnMut(V) + Send + 'static,
-    ) -> Subscription
+        handler: H,
+    ) -> Observation
     where
         V: PartialEq + Clone + Send + 'static,
+        H: FnMut(V) + Send + 'static,
     {
         let center = self.0.center().clone();
         let main = center.main().clone();
+        // The observation holds the handler's one strong handle; the watcher and each delivery hold it weakly.
         let handler = Arc::new(Mutex::new(handler));
+        let weak = Arc::downgrade(&handler);
         let mut changes = center.watch();
+        // `select` is the author's: it reads a copy, never the state under the watch's lock. The baseline
+        // is taken here, so a commit that lands before the watcher first runs is still a change.
+        let state = changes.borrow_and_update().clone();
+        let mut last = select(&state);
+        drop(state);
         let task = main.clone().spawn_work(async move {
-            let mut last = select(&changes.borrow_and_update());
             while changes.changed().await.is_ok() {
-                let now = select(&changes.borrow_and_update());
+                let state = changes.borrow_and_update().clone();
+                let now = select(&state);
                 if now == last {
                     continue;
                 }
                 last = now.clone();
-                let handler = handler.clone();
-                main.enqueue(move || (handler.lock().unwrap())(now));
+                let handler = weak.clone();
+                main.enqueue(move || deliver(&handler, now));
             }
         });
-        Subscription::new(move || task.abort())
+        Observation {
+            _handler: handler,
+            task,
+        }
+    }
+}
+
+/// One delivery, on main: the handler runs only if the observation is still held. The handler's lock
+/// only orders its calls (all on main); a handle upgraded here is dropped after that lock is released.
+fn deliver<V, H: FnMut(V)>(handler: &Weak<Mutex<H>>, value: V) {
+    let Some(handler) = handler.upgrade() else {
+        return;
+    };
+    let mut call = handler.lock().unwrap();
+    (*call)(value);
+    drop(call);
+    drop(handler);
+}
+
+/// A live [`Relay::observe`]: Combine's `AnyCancellable`. Dropping it ends the observation and lets its
+/// handler go; keep it for as long as you observe.
+#[must_use = "an Observation ends when it is dropped: keep it for as long as you observe"]
+pub struct Observation {
+    _handler: Arc<dyn Any + Send + Sync>,
+    task: JoinHandle<()>,
+}
+
+impl Drop for Observation {
+    /// Stops the watcher, which holds only a weak handle to the handler: the handler goes with this.
+    fn drop(&mut self) {
+        self.task.abort();
     }
 }

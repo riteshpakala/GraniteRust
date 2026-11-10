@@ -8,7 +8,7 @@ use std::time::Duration;
 
 use granite::{
     Agent, AgentContext, AgentRunId, BoxError, Center, Event, GraniteAgent, GraniteReducer,
-    Lifecycle, Main, TransientRegistry,
+    GraniteService, Lifecycle, Main, Relay, TransientRegistry,
 };
 
 #[derive(Clone, PartialEq, Default, Debug)]
@@ -304,6 +304,105 @@ fn a_registry_resident_may_reach_its_registry_as_it_is_made_or_dropped() {
         assert!(
             registry.contains("left behind"),
             "the drop ran after the unlock"
+        );
+    });
+}
+
+/// A service made by hand, observed through a relay.
+struct Tally {
+    center: Center<Sends>,
+}
+
+impl GraniteService for Tally {
+    type State = Sends;
+    fn make(main: &Main) -> Self {
+        Tally {
+            center: Center::new(main),
+        }
+    }
+    fn center(&self) -> &Center<Sends> {
+        &self.center
+    }
+}
+
+fn commit(relay: &Relay<Tally>, sends: u32) -> impl std::future::Future<Output = ()> + use<> {
+    let center = relay.center().clone();
+    let main = center.main().clone();
+    async move { main.call(move || center.commit(Sends(sends))).await }
+}
+
+#[test]
+fn an_observation_hears_each_change_of_what_it_selects_on_main() {
+    let main = Main::spawn();
+    let relay = Relay::of(Arc::new(Tally::make(&main)));
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let (kept, on) = (seen.clone(), main.clone());
+    let _observation = relay.observe(
+        |state| state.0 / 10,
+        move |tens| {
+            assert!(on.is_main());
+            kept.lock().unwrap().push(tens)
+        },
+    );
+    main.block_on(async {
+        for sends in [1, 12, 15, 23] {
+            commit(&relay, sends).await;
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        assert!(
+            granite::testing::until(
+                || *seen.lock().unwrap() == vec![1, 2],
+                Duration::from_secs(2)
+            )
+            .await,
+            "{:?}",
+            seen.lock().unwrap()
+        );
+    });
+}
+
+#[test]
+fn an_observation_dropped_lets_its_handler_go_and_runs_nothing_queued() {
+    let main = Main::spawn();
+    let relay = Relay::of(Arc::new(Tally::make(&main)));
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let held = Arc::new(());
+    let (kept, capture) = (seen.clone(), held.clone());
+    let observation = relay.observe(
+        |state| state.0,
+        move |sends| {
+            let _ = &capture;
+            kept.lock().unwrap().push(sends)
+        },
+    );
+    main.block_on(async {
+        commit(&relay, 1).await;
+        assert!(
+            granite::testing::until(|| *seen.lock().unwrap() == vec![1], Duration::from_secs(2))
+                .await
+        );
+
+        // Main commits, then is held, so the delivery for 2 queues behind the hold.
+        let (release, hold) = mpsc::channel::<()>();
+        let center = relay.center().clone();
+        main.enqueue(move || {
+            center.commit(Sends(2));
+            let _ = hold.recv();
+        });
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        drop(observation);
+        assert_eq!(
+            Arc::strong_count(&held),
+            1,
+            "the handler went with the observation"
+        );
+        release.send(()).unwrap();
+        main.turn().await;
+        main.turn().await;
+        assert_eq!(
+            *seen.lock().unwrap(),
+            vec![1],
+            "the queued delivery did not run"
         );
     });
 }
