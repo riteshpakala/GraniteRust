@@ -16,6 +16,8 @@
 //! reducers and its agents' drains. Work never touches state: it sends, and the send commits.
 
 pub mod agent;
+mod emitter;
+mod locked;
 mod main_queue;
 mod persist;
 mod reducer;
@@ -34,6 +36,7 @@ pub use agent::{
     AgentLifecycle, AgentOutcome, AgentRunError, AgentRunId, AgentStart, CancelFlag, ChildFrame,
     ChildRun, GraniteAgent, RunScope, Tap,
 };
+pub use emitter::{Emitter, EmitterKey};
 pub use main_queue::Main;
 pub use persist::{FilePersistence, Persistence};
 pub use reducer::{Delivery, Effect, Event, GraniteReducer};
