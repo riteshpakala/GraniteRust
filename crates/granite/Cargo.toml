@@ -1,6 +1,6 @@
 [package]
 name = "granite"
-description = "Granite's kernel in Rust: one writer on main, reducers and their effects, services and relays, signals and scopes, tickets, and the agent run engine."
+description = "Granite's kernel in Rust: one writer on main, reducers and their effects, services and relays, emitters that hold their receivers weakly, tickets, and the agent run engine."
 edition.workspace = true
 license.workspace = true
 version.workspace = true

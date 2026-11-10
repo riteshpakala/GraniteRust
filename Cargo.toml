@@ -1,6 +1,6 @@
 # GraniteRust: Granite's agent kernel and the granite-agent/1 standard, in Rust.
 #
-#   crates/granite            the kernel: main queue, state, reducers, services, signals, tickets, the agent run engine
+#   crates/granite            the kernel: main queue, state, reducers, services, emitters, tickets, the agent run engine
 #   crates/granite-agents     the GraniteAgent layer: packages, schema, answers, the wire, server, process, shelf, installer
 #   crates/granite-conformance  fixture runners and the real-process tests (publish = false)
 #   crates/granite-cli        the `granite` command: install, describe, run, check

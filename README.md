@@ -7,7 +7,7 @@ and the answer are byte-compatible: a Swift host (Craft) runs a Rust runner, and
 
 | Crate | What it is |
 | --- | --- |
-| [`crates/granite`](crates/granite) | The kernel: one writer on main, centers, reducers and their effects, services and relays, signals and scopes, tickets, and the agent run engine (`GraniteAgent`, `Agent`) |
+| [`crates/granite`](crates/granite) | The kernel: one writer on main, centers, reducers and their effects, services and relays, emitters that hold their receivers weakly, tickets, and the agent run engine (`GraniteAgent`, `Agent`) |
 | [`crates/granite-agents`](crates/granite-agents) | The standard: agent packages, the schema read off an input, `granite-answer/1`, the wire, a runner's `main`, the host's side of a call, the shelf, and an installer that builds with Cargo |
 | [`crates/granite-cli`](crates/granite-cli) | `granite`: install agents on a shelf, describe a runner, run one call by hand, check JSON against the standard |
 | [`crates/granite-conformance`](crates/granite-conformance) | A fixture runner (`parrot`) and the tests that drive real processes over pipes |
