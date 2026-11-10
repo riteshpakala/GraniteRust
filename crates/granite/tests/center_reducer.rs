@@ -158,6 +158,88 @@ fn a_throttled_event_keeps_the_first_and_then_the_latest() {
 }
 
 #[test]
+fn a_throttled_event_without_latest_keeps_the_first_of_the_window() {
+    let main = Main::spawn();
+    let center = Center::<Counts>::new(&main);
+    let add = Event::new(&center, Add).throttled(Duration::from_millis(60), false);
+    main.block_on(async {
+        for n in 1..=4 {
+            add.send(n);
+        }
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        main.turn().await;
+        assert_eq!(
+            center.state(),
+            Counts {
+                total: 3,
+                sends: 2,
+                effects_saw: vec![]
+            },
+            "1 at once, then 2: the first held back, as Swift's throttle keeps it"
+        );
+    });
+}
+
+/// A payload that is itself an `Option`: a `None` held back is still a payload.
+struct Maybe;
+impl GraniteReducer for Maybe {
+    type State = Counts;
+    type Payload = Option<u32>;
+    fn reduce(&self, state: &mut Counts, payload: &Option<u32>) {
+        state.total += payload.unwrap_or(100);
+        state.sends += 1;
+    }
+}
+
+#[test]
+fn a_none_payload_held_back_is_delivered() {
+    let main = Main::spawn();
+    let center = Center::<Counts>::new(&main);
+    let throttled = Event::new(&center, Maybe).throttled(Duration::from_millis(40), true);
+    let debounced = Event::new(&center, Maybe).debounced(Duration::from_millis(20));
+    main.block_on(async {
+        throttled.send(Some(1));
+        throttled.send(None);
+        debounced.send(Some(5));
+        debounced.send(None);
+        tokio::time::sleep(Duration::from_millis(150)).await;
+        main.turn().await;
+        assert_eq!(
+            center.state(),
+            Counts {
+                total: 201,
+                sends: 3,
+                effects_saw: vec![]
+            }
+        );
+    });
+}
+
+#[test]
+fn clones_of_an_event_share_one_delivery() {
+    let main = Main::spawn();
+    let center = Center::<Counts>::new(&main);
+    let add = Event::new(&center, Add);
+    let debounced = add.clone().debounced(Duration::from_millis(40));
+    main.block_on(async {
+        add.send(1);
+        debounced.send(2);
+        add.send(3);
+        tokio::time::sleep(Duration::from_millis(150)).await;
+        main.turn().await;
+        assert_eq!(
+            center.state(),
+            Counts {
+                total: 3,
+                sends: 1,
+                effects_saw: vec![]
+            },
+            "one burst across both handles, and the last of it"
+        );
+    });
+}
+
+#[test]
 fn lifecycle_hooks_fire_on_main_when_the_center_appears() {
     let main = Main::spawn();
     let center = Center::<Counts>::new(&main);

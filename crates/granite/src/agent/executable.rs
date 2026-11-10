@@ -59,14 +59,16 @@ impl<A: GraniteAgent> Agent<A> {
         }
     }
 
-    /// Starts a run with [`GraniteAgent::lifecycle_input`] each time the center reaches `when`.
+    /// Starts a run with [`GraniteAgent::lifecycle_input`] each time the center reaches `when`, for as long
+    /// as the agent is held: the center holds it weakly.
     pub fn lifecycle(self, when: Lifecycle) -> Self {
-        let container = self.container.clone();
-        self.container.center.on_lifecycle(when, move || {
-            if let Some(input) = A::lifecycle_input() {
-                container.start(input);
-            }
-        });
+        self.container
+            .center
+            .on_lifecycle_of(&self.container, when, |container| {
+                if let Some(input) = A::lifecycle_input() {
+                    container.start(input);
+                }
+            });
         self
     }
 

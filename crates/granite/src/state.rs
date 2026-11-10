@@ -1,11 +1,15 @@
 //! A state and its one writer: a Swift Granite center, its store and its lifecycle.
+//!
+//! PIN: A HOOK DOES NOT KEEP ITS OWNER. [`Center::on_lifecycle_of`] holds the receiver weakly, so an event
+//! or an agent hooked to its own center's lifecycle is not kept alive by the center it holds: whoever made
+//! it holds it, and the hook ends with it.
 
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 use tokio::sync::watch;
 
-use crate::Main;
 use crate::persist::Persistence;
+use crate::{Emitter, Main};
 
 /// What a center holds: a value, compared to know whether a commit changed anything.
 pub trait GraniteState: Clone + PartialEq + Default + Send + Sync + 'static {}
@@ -20,8 +24,6 @@ pub enum Lifecycle {
     None,
 }
 
-type Hook = Arc<dyn Fn() + Send + Sync>;
-
 /// A state and its writer. Clones share one state.
 ///
 /// PIN: COMMITS ARE MAIN'S. [`Center::commit`] and [`Center::update`] run on main; anything else sends.
@@ -33,7 +35,9 @@ struct Inner<S> {
     main: Main,
     label: String,
     state: watch::Sender<S>,
-    hooks: Mutex<Vec<(Lifecycle, Hook)>>,
+    lifecycle: Emitter<Lifecycle>,
+    /// The receiver of the hooks [`Center::on_lifecycle`] adds: they last as long as the center.
+    hooks: Arc<()>,
     store: Option<Arc<dyn Persistence<S>>>,
 }
 
@@ -75,7 +79,8 @@ impl<S: GraniteState> Center<S> {
                 main: main.clone(),
                 label,
                 state,
-                hooks: Mutex::new(Vec::new()),
+                lifecycle: Emitter::new(),
+                hooks: Arc::new(()),
                 store,
             }),
         }
@@ -119,17 +124,15 @@ impl<S: GraniteState> Center<S> {
             "granite: {} committed off main",
             self.inner.label
         );
-        let mut saved = None;
-        self.inner.state.send_if_modified(|held| {
-            if *held == state {
-                return false;
-            }
-            *held = state;
-            if self.inner.store.is_some() {
-                saved = Some(held.clone());
-            }
-            true
-        });
+        // Main is the one writer, so comparing first and replacing after cannot race. Neither the state
+        // turned away nor the one replaced is dropped under the watch's lock.
+        let unchanged = *self.inner.state.borrow() == state;
+        if unchanged {
+            return;
+        }
+        let saved = self.inner.store.as_ref().map(|_| state.clone());
+        let replaced = self.inner.state.send_replace(state);
+        drop(replaced);
         if let (Some(store), Some(state)) = (&self.inner.store, saved) {
             store.save(&state);
         }
@@ -142,13 +145,34 @@ impl<S: GraniteState> Center<S> {
         self.commit(state);
     }
 
-    /// Calls `hook` on main each time the center reaches `when`.
+    /// Calls `hook` on main each time the center reaches `when`, for as long as the center lives. A hook
+    /// that captures this center keeps it alive: hook what the center does not own with
+    /// [`Center::on_lifecycle_of`].
     pub fn on_lifecycle(&self, when: Lifecycle, hook: impl Fn() + Send + Sync + 'static) {
         self.inner
-            .hooks
-            .lock()
-            .unwrap()
-            .push((when, Arc::new(hook)));
+            .lifecycle
+            .on(&self.inner.hooks, None, move |_, reached| {
+                if *reached == when {
+                    hook()
+                }
+            });
+    }
+
+    /// Calls `hook` with `receiver` on main each time the center reaches `when`, until `receiver` is
+    /// released. The center holds it weakly, so `receiver` may hold the center.
+    pub fn on_lifecycle_of<R: Send + Sync + 'static>(
+        &self,
+        receiver: &Arc<R>,
+        when: Lifecycle,
+        hook: impl Fn(&Arc<R>) + Send + Sync + 'static,
+    ) {
+        self.inner
+            .lifecycle
+            .on(receiver, None, move |receiver, reached| {
+                if *reached == when {
+                    hook(receiver)
+                }
+            });
     }
 
     /// The host shows the center: its `OnAppear` hooks fire on main.
@@ -167,19 +191,7 @@ impl<S: GraniteState> Center<S> {
     }
 
     fn fire(&self, when: Lifecycle) {
-        let hooks: Vec<Hook> = self
-            .inner
-            .hooks
-            .lock()
-            .unwrap()
-            .iter()
-            .filter(|(at, _)| *at == when)
-            .map(|(_, hook)| hook.clone())
-            .collect();
-        self.inner.main.run(move || {
-            for hook in hooks {
-                hook()
-            }
-        });
+        let lifecycle = self.inner.lifecycle.clone();
+        self.inner.main.run(move || lifecycle.send(when));
     }
 }

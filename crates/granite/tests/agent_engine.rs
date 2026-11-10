@@ -264,6 +264,9 @@ fn a_dropped_performer_cancels_the_run_it_started() {
             tokio::time::timeout(Duration::from_millis(20), agent.perform(ask("k", 10, 40))).await;
         assert!(waited.is_err());
         assert!(granite::testing::until(|| !agent.is_live("k"), Duration::from_secs(2)).await);
+        // The cancel leaves the live set and commits `Cancelled` in one main turn: polled from here,
+        // the first can be seen before the second. The turn after it has committed.
+        main.turn().await;
         assert_eq!(
             lifecycles(&center, "Counter-1"),
             vec!["started", "cancelled"]
